@@ -1,0 +1,15 @@
+{
+    "name": "food-exchange/chat",
+    "description": "Real-time chat system for Food Exchange Platform",
+    "type": "project",
+    "require": {
+        "cboden/ratchet": "^0.4.4",
+        "ext-pdo": "*",
+        "ext-json": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "FoodExchange\\": "websocket/"
+        }
+    }
+}
