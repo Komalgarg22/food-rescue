@@ -92,8 +92,8 @@ include 'includes/header.php';
                 </button>
             </div>
             
-            <!-- Search Form (hidden by default) -->
-            <div id="searchContainer" class="mt-2 ">
+            <!-- Search Form -->
+            <div id="searchContainer" class="mt-2 hidden">
                 <form method="GET" action="messages.php" class="flex">
                     <input type="text" name="search" placeholder="Search by name, email or phone" 
                            class="flex-1 px-3 py-2 border rounded-l-lg focus:outline-none focus:ring-2 focus:ring-green-600">
@@ -133,7 +133,7 @@ include 'includes/header.php';
             <div class="divide-y" id="conversationsList">
                 <?php foreach ($conversations as $conv): ?>
                     <a href="messages.php?to=<?= $conv['other_user_id'] ?>" 
-                       class="block p-4 hover:bg-gray-50 transition <?= $current_chat['id'] == $conv['other_user_id'] ? 'bg-gray-100' : '' ?>">
+                       class="block p-4 hover:bg-gray-50 transition <?= isset($current_chat['id']) && $current_chat['id'] == $conv['other_user_id'] ? 'bg-gray-100' : '' ?>">
                         <div class="flex items-center">
                             <img src="uploads/profile/<?= $conv['other_user_image'] ?? 'default.png' ?>" 
                                  class="w-10 h-10 rounded-full mr-3">
@@ -166,6 +166,7 @@ include 'includes/header.php';
                      class="w-10 h-10 rounded-full mr-3">
                 <div>
                     <h3 class="font-semibold"><?= $current_chat['name'] ?></h3>
+                    <p id="typingStatus" class="text-xs text-gray-500 hidden">typing...</p>
                 </div>
             </div>
 
@@ -220,31 +221,130 @@ include 'includes/header.php';
                 </form>
             </div>
 
-            <!-- Socket.IO and JavaScript -->
-            <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+            <!-- JavaScript -->
             <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
             <script>
-            const socket = io('http://localhost:3000', {
-                query: {
-                    userId: <?= $user_id ?>
-                }
-            });
-
-            function scrollToBottom() {
-                const container = document.getElementById('messagesContainer');
-                container.scrollTop = container.scrollHeight;
-            }
-
             document.addEventListener('DOMContentLoaded', function() {
+                let currentChatId = <?= $current_chat['id'] ?>;
+                let lastMessageId = <?= !empty($messages) ? end($messages)['id'] : 0 ?>;
+                let isPolling = false;
+                let typingTimeout;
+                let isTyping = false;
+
+                function scrollToBottom() {
+                    const container = document.getElementById('messagesContainer');
+                    container.scrollTop = container.scrollHeight;
+                }
+
+                function formatMessageTime(timestamp) {
+                    const date = new Date(timestamp);
+                    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                }
+
+                function fetchNewMessages() {
+                    if (!currentChatId || isPolling) return;
+                    
+                    isPolling = true;
+                    
+                    fetch(`get-messages.php?receiver_id=${currentChatId}&last_message_id=${lastMessageId}`)
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.success && data.messages.length > 0) {
+                                appendMessages(data.messages);
+                                lastMessageId = data.messages[data.messages.length - 1].id;
+                            }
+                        })
+                        .catch(error => console.error('Error fetching messages:', error))
+                        .finally(() => {
+                            isPolling = false;
+                        });
+                }
+
+                function appendMessages(messages) {
+                    const messagesList = document.getElementById('messagesList');
+                    
+                    messages.forEach(msg => {
+                        const isSender = msg.sender_id == <?= $user_id ?>;
+                        const messageTime = formatMessageTime(msg.created_at);
+                        
+                        const messageHtml = `
+                            <div class="message-item flex ${isSender ? 'justify-end' : 'justify-start'}" 
+                                 data-id="${msg.id}">
+                                <div class="${isSender ? 'bg-green-100' : 'bg-white'} rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow">
+                                    <p class="text-gray-800">${escapeHtml(msg.message)}</p>
+                                    <p class="text-xs text-gray-500 mt-1 text-right">
+                                        ${messageTime}
+                                        ${isSender ? `
+                                            ${msg.is_read ? `
+                                                <svg class="w-3 h-3 inline-block ml-1 text-blue-500" viewBox="0 0 20 20">
+                                                    <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
+                                                </svg>
+                                            ` : `
+                                                <svg class="w-3 h-3 inline-block ml-1 text-gray-400" viewBox="0 0 20 20">
+                                                    <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
+                                                </svg>
+                                            `}
+                                        ` : ''}
+                                    </p>
+                                    ${isSender ? `
+                                        <div class="mt-1 flex justify-end">
+                                            <button class="delete-message text-xs text-red-500 hover:text-red-700" 
+                                                    data-id="${msg.id}">Delete</button>
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            </div>
+                        `;
+                        
+                        if (messagesList) {
+                            messagesList.insertAdjacentHTML('beforeend', messageHtml);
+                        } else {
+                            document.getElementById('messagesContainer').innerHTML = `
+                                <div class="space-y-4" id="messagesList">${messageHtml}</div>
+                            `;
+                        }
+                    });
+                    
+                    scrollToBottom();
+                }
+
+                function escapeHtml(unsafe) {
+                    return unsafe
+                        .replace(/&/g, "&amp;")
+                        .replace(/</g, "&lt;")
+                        .replace(/>/g, "&gt;")
+                        .replace(/"/g, "&quot;")
+                        .replace(/'/g, "&#039;");
+                }
+
+                function showTypingIndicator() {
+                    const typingStatus = document.getElementById('typingStatus');
+                    typingStatus.classList.remove('hidden');
+                    
+                    clearTimeout(typingTimeout);
+                    typingTimeout = setTimeout(() => {
+                        typingStatus.classList.add('hidden');
+                    }, 3000);
+                }
+
+                // Initialize
                 scrollToBottom();
                 
+                // Start polling for new messages every 2 seconds
+                const pollInterval = setInterval(fetchNewMessages, 2000);
+                
+                // Clean up interval when leaving the page
+                window.addEventListener('beforeunload', () => {
+                    clearInterval(pollInterval);
+                });
+
                 // Toggle search form
                 document.getElementById('newChatBtn').addEventListener('click', function() {
                     const searchContainer = document.getElementById('searchContainer');
                     searchContainer.classList.toggle('hidden');
                 });
                 
-                // Handle message submission with AJAX (prevent page reload)
+                // Handle message submission with AJAX
                 document.getElementById('messageForm').addEventListener('submit', function(e) {
                     e.preventDefault();
                     
@@ -260,7 +360,7 @@ include 'includes/header.php';
                         const tempMsg = `
                             <div class="flex justify-end message-item" data-id="${tempId}">
                                 <div class="bg-green-100 rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow animate-pulse">
-                                    <p class="text-gray-800">${message}</p>
+                                    <p class="text-gray-800">${escapeHtml(message)}</p>
                                     <p class="text-xs text-gray-500 mt-1 text-right">Sending...</p>
                                 </div>
                             </div>
@@ -290,7 +390,7 @@ include 'includes/header.php';
                                     tempElement.outerHTML = `
                                         <div class="flex justify-end message-item" data-id="${data.message_id}">
                                             <div class="bg-green-100 rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow">
-                                                <p class="text-gray-800">${message}</p>
+                                                <p class="text-gray-800">${escapeHtml(message)}</p>
                                                 <p class="text-xs text-gray-500 mt-1 text-right">
                                                     Just now
                                                     <svg class="w-3 h-3 inline-block ml-1 text-gray-400" viewBox="0 0 20 20">
@@ -306,16 +406,8 @@ include 'includes/header.php';
                                     `;
                                 }
                                 
-                                // Emit socket event
-                                socket.emit('sendMessage', {
-                                    senderId: <?= $user_id ?>,
-                                    receiverId: receiverId,
-                                    messageId: data.message_id,
-                                    message: message,
-                                    senderName: '<?= $_SESSION['user_name'] ?>',
-                                    senderImage: '<?= $_SESSION['profile_picture'] ?? 'default.png' ?>',
-                                    timestamp: new Date().toISOString()
-                                });
+                                // Update last message ID
+                                lastMessageId = data.message_id;
                                 
                                 document.getElementById('messageInput').value = '';
                             }
@@ -323,59 +415,24 @@ include 'includes/header.php';
                     }
                 });
                 
-                // Handle incoming messages
-                socket.on('receiveMessage', function(data) {
-                    if (data.receiverId == <?= $current_chat['id'] ?? 0 ?>) {
-                        const messagesList = document.getElementById('messagesList');
-                        
-                        const newMsg = `
-                            <div class="flex justify-start message-item" data-id="${data.messageId}">
-                                <div class="bg-white rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow animate-bounce">
-                                    <p class="text-gray-800">${data.message}</p>
-                                    <p class="text-xs text-gray-500 mt-1 text-right">
-                                        Just now
-                                    </p>
-                                </div>
-                            </div>
-                        `;
-                        
-                        if (messagesList) {
-                            messagesList.insertAdjacentHTML('beforeend', newMsg);
-                        } else {
-                            document.getElementById('messagesContainer').innerHTML = `
-                                <div class="space-y-4" id="messagesList">${newMsg}</div>
-                            `;
+                // Typing indicator for current user
+                const messageInput = document.getElementById('messageInput');
+                if (messageInput) {
+                    let typingTimer;
+                    
+                    messageInput.addEventListener('input', function() {
+                        if (!isTyping && this.value.length > 0) {
+                            isTyping = true;
+                            // In a real WebSocket implementation, we'd emit a typing event here
+                        } else if (isTyping && this.value.length === 0) {
+                            isTyping = false;
                         }
-                        
-                        setTimeout(() => {
-                            const msgElement = document.querySelector(`[data-id="${data.messageId}"] .animate-bounce`);
-                            if (msgElement) msgElement.classList.remove('animate-bounce');
-                        }, 1000);
-                        
-                        scrollToBottom();
-                        
-                        // Mark as read
-                        fetch('mark_as_read.php', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/x-www-form-urlencoded',
-                            },
-                            body: `message_id=${data.messageId}`
-                        });
-                    }
-                });
-                
-                // Handle read receipts
-                socket.on('updateReadStatus', function(data) {
-                    const msgElement = document.querySelector(`[data-id="${data.messageId}"]`);
-                    if (msgElement) {
-                        const svg = msgElement.querySelector('svg');
-                        if (svg) {
-                            svg.classList.remove('text-gray-400');
-                            svg.classList.add('text-blue-500');
-                        }
-                    }
-                });
+                    });
+                    
+                    messageInput.addEventListener('blur', function() {
+                        isTyping = false;
+                    });
+                }
                 
                 // Handle message deletion
                 document.addEventListener('click', function(e) {
