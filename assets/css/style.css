@@ -1,0 +1,90 @@
+/* Mobile-first responsive design */
+.container {
+    width: 100%;
+    padding: 0 15px;
+    margin: 0 auto;
+}
+
+@media (min-width: 640px) {
+    .container {
+        max-width: 640px;
+    }
+}
+
+@media (min-width: 768px) {
+    .container {
+        max-width: 768px;
+    }
+}
+
+@media (min-width: 1024px) {
+    .container {
+        max-width: 1024px;
+    }
+}
+
+@media (min-width: 1280px) {
+    .container {
+        max-width: 1280px;
+    }
+}
+
+/* Navigation */
+.nav-mobile {
+    display: block;
+}
+
+.nav-desktop {
+    display: none;
+}
+
+@media (min-width: 768px) {
+    .nav-mobile {
+        display: none;
+    }
+    
+    .nav-desktop {
+        display: flex;
+    }
+}
+
+/* Food cards */
+.food-card {
+    width: 100%;
+    margin-bottom: 1.5rem;
+}
+
+@media (min-width: 640px) {
+    .food-card {
+        width: calc(50% - 1rem);
+    }
+}
+
+@media (min-width: 1024px) {
+    .food-card {
+        width: calc(33.333% - 1rem);
+    }
+}
+
+/* Forms */
+.form-input {
+    width: 100%;
+}
+
+@media (min-width: 768px) {
+    .form-input {
+        width: auto;
+    }
+}
+
+/* Add hamburger menu for mobile */
+.hamburger {
+    display: block;
+    cursor: pointer;
+}
+
+@media (min-width: 768px) {
+    .hamburger {
+        display: none;
+    }
+}
