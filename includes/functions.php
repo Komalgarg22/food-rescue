@@ -82,4 +82,9 @@ function calculateDistance($lat1, $lon1, $lat2, $lon2) {
     $miles = $dist * 60 * 1.1515;
     return $miles * 1.609344;
 }
+function validateDate($date, $format = 'Y-m-d') {
+    $d = DateTime::createFromFormat($format, $date);
+    return $d && $d->format($format) === $date;
+}
 ?>
+

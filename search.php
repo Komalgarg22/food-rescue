@@ -5,15 +5,15 @@ require_once 'includes/functions.php';
 $page_title = "Search Results";
 include 'includes/header.php';
 
-// Get search parameters
-$keywords = $_GET['q'] ?? '';
+$q = $_GET['q'] ?? '';
 $category = $_GET['category'] ?? '';
-$max_price = $_GET['max_price'] ?? '';
 $near_me = isset($_GET['near_me']);
 $expiring_soon = isset($_GET['expiring_soon']);
 $available_now = isset($_GET['available_now']);
 
-// Build query
+$user_lat = $_SESSION['user_lat'] ?? null;
+$user_lng = $_SESSION['user_lng'] ?? null;
+
 $query = "SELECT f.*, u.name as user_name, u.profile_picture as user_image 
           FROM food_items f 
           JOIN users u ON f.user_id = u.id 
@@ -21,103 +21,89 @@ $query = "SELECT f.*, u.name as user_name, u.profile_picture as user_image
 
 $params = [];
 
-if (!empty($keywords)) {
-    $query .= " AND (f.title LIKE ? OR f.description LIKE ?)";
-    $params[] = "%$keywords%";
-    $params[] = "%$keywords%";
+// Search keyword
+if (!empty($q)) {
+    $q = $conn->real_escape_string($q);
+    $query .= " AND (f.title LIKE '%$q%' OR f.description LIKE '%$q%' OR f.price LIKE '%$q%')";
 }
 
+// Category filter
 if (!empty($category)) {
-    $query .= " AND f.category = ?";
-    $params[] = $category;
+    $category = $conn->real_escape_string($category);
+    $query .= " AND f.category = '$category'";
 }
 
-if (!empty($max_price) && is_numeric($max_price)) {
-    $query .= " AND f.price <= ?";
-    $params[] = $max_price;
-}
-
-if ($expiring_soon) {
-    $query .= " AND f.expiration_time BETWEEN NOW() AND DATE_ADD(NOW(), INTERVAL 24 HOUR)";
-}
-
+// Available now
 if ($available_now) {
-    $query .= " AND f.available_from <= NOW()";
+    $query .= " AND f.pickup_start <= NOW() AND f.pickup_end >= NOW()";
 }
 
-// Add location filtering if needed
-if ($near_me && isset($_SESSION['user_lat']) && isset($_SESSION['user_lng'])) {
-    $query .= " AND (f.latitude IS NOT NULL AND f.longitude IS NOT NULL)";
-    // Note: Actual distance calculation would be done in PHP after fetching
+// Expiring soon (within 6 hours)
+if ($expiring_soon) {
+    $query .= " AND f.expiration_time <= DATE_ADD(NOW(), INTERVAL 6 HOUR)";
 }
 
 $query .= " ORDER BY f.created_at DESC";
 
-// Prepare and execute query
-$stmt = $conn->prepare($query);
+$result = $conn->query($query);
 
-// Bind parameters dynamically (if any)
-if (!empty($params)) {
-    $types = str_repeat('s', count($params)); // Assumes all parameters are strings
-    $stmt->bind_param($types, ...$params);
-}
+$food_items = [];
 
-$stmt->execute();
-$result = $stmt->get_result();
-$food_items = $result->fetch_all(MYSQLI_ASSOC);
-
-// Filter by distance if needed
-if ($near_me && isset($_SESSION['user_lat']) && isset($_SESSION['user_lng'])) {
-    $food_items = array_filter($food_items, function($item) {
-        if (!$item['latitude'] || !$item['longitude']) return false;
-        
-        $distance = calculateDistance(
-            $_SESSION['user_lat'], 
-            $_SESSION['user_lng'],
-            $item['latitude'],
-            $item['longitude']
-        );
-        
-        $item['distance'] = $distance;
-        return $distance <= 10; // 10 km radius
-    });
-    
-    // Sort by distance
-    usort($food_items, function($a, $b) {
-        return $a['distance'] <=> $b['distance'];
-    });
+if ($result && $result->num_rows > 0) {
+    while ($row = $result->fetch_assoc()) {
+        if ($near_me && $user_lat && $user_lng) {
+            $distance = calculateDistance($user_lat, $user_lng, $row['latitude'], $row['longitude']);
+            if ($distance <= 5) { // Only within 5 km
+                $row['distance'] = $distance;
+                $food_items[] = $row;
+            }
+        } else {
+            $food_items[] = $row;
+        }
+    }
 }
 ?>
 
-<!-- Display results -->
-<div class="max-w-6xl mx-auto">
-    <h1 class="text-2xl font-bold mb-6">Search Results</h1>
+<!-- ✅ MAIN CONTENT AREA -->
+<main class="min-h-screen pt-16 pb-24 bg-gray-50">
+    <div class="max-w-6xl mx-auto px-4">
+        <h1 class="text-2xl font-bold mb-6">Search Results</h1>
 
-    <?php if (empty($food_items)): ?>
-        <p class="text-gray-500">No results found for your search.</p>
-    <?php else: ?>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <?php foreach ($food_items as $item): ?>
-                <div class="bg-white rounded-lg shadow-lg overflow-hidden">
-                    <img src="uploads/food/<?php echo $item['image']; ?>" alt="<?php echo $item['title']; ?>" class="w-full h-48 object-cover">
-                    <div class="p-4">
-                        <h2 class="text-xl font-semibold"><?php echo $item['title']; ?></h2>
-                        <p class="text-gray-700 mt-2"><?php echo substr($item['description'], 0, 100); ?>...</p>
-                        <div class="mt-3">
-                            <span class="text-gray-600">Price: ₹<?php echo $item['price']; ?></span><br>
-                            <span class="text-gray-600">Category: <?php echo $item['category']; ?></span>
-                        </div>
-                        <div class="mt-4 flex justify-between items-center">
-                            <a href="view_food.php?id=<?php echo $item['id']; ?>" class="text-blue-600 hover:text-blue-800">View Details</a>
-                            <?php if ($near_me): ?>
-                                <span class="text-sm text-gray-500"><?php echo number_format($item['distance'], 2); ?> km away</span>
+            <?php if (count($food_items) === 0): ?>
+                <p class="text-gray-500 col-span-full">No food items found matching your criteria.</p>
+            <?php else: ?>
+                <?php foreach ($food_items as $item): ?>
+                    <div class="bg-white rounded-lg shadow-md overflow-hidden">
+                        <img src="uploads/food/<?php echo $item['image']; ?>" alt="<?php echo $item['title']; ?>" class="w-full h-48 object-cover">
+                        <div class="p-4">
+                            <h3 class="text-xl font-semibold mb-2"><?php echo $item['title']; ?></h3>
+                            <p class="text-gray-600 mb-2"><?php echo $item['description']; ?></p>
+                            <p class="text-green-600 font-bold mb-2">$<?php echo $item['price']; ?></p>
+                            <p class="text-gray-500 text-sm mb-4">Quantity: <?php echo $item['quantity']; ?></p>
+
+                            <?php if (isset($item['distance'])): ?>
+                                <p class="text-sm text-gray-500"><?php echo round($item['distance'], 2); ?> km away</p>
+                            <?php elseif ($user_lat && $user_lng): ?>
+                                <p class="text-sm text-gray-500">
+                                    <?php echo round(calculateDistance($user_lat, $user_lng, $item['latitude'], $item['longitude']), 2); ?> km away
+                                </p>
                             <?php endif; ?>
+
+                            <div class="flex items-center mt-4">
+                                <img src="uploads/profile/<?php echo $item['user_image']; ?>" alt="<?php echo $item['user_name']; ?>" class="w-8 h-8 rounded-full mr-2">
+                                <span class="text-sm"><?php echo $item['user_name']; ?></span>
+                            </div>
+
+                            <a href="view_food.php?id=<?php echo $item['id']; ?>" class="block mt-4 bg-green-600 text-white text-center py-2 rounded hover:bg-green-700 transition">
+                                View Details
+                            </a>
                         </div>
                     </div>
-                </div>
-            <?php endforeach; ?>
+                <?php endforeach; ?>
+            <?php endif; ?>
         </div>
-    <?php endif; ?>
-</div>
+    </div>
+</main>
 
 <?php include 'includes/footer.php'; ?>

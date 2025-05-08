@@ -56,7 +56,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($stmt->execute()) {
             $order_id = $mysqli->insert_id;
-            $message = "New 🛒 🍔 Order for your food item: " . $food['title'];
+            $message = "New  Order for your food item: " . $food['title'];
 
             $stmt = $mysqli->prepare("INSERT INTO notifications (user_id, content, created_at) 
                                       VALUES (?, ?, NOW())");

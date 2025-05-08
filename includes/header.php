@@ -8,6 +8,9 @@ $page_title = $page_title ?? 'Home';
 // Get current page without query string
 $current_page = basename(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH));
 
+// Hide search form on login/register
+$hide_search = in_array($current_page, ['login.php', 'register.php']);
+
 // Active class checker
 function active_link($page)
 {
@@ -38,51 +41,50 @@ function active_link($page)
 
         <!-- Desktop Menu -->
         <div class="hidden md:flex items-center space-x-6">
+
+            <!-- Search Form -->
+            <?php if (!$hide_search): ?>
+                <form action="search.php" method="GET" class="flex items-center gap-2">
+                    <input 
+                        type="text" 
+                        name="q" 
+                        placeholder="Search food..."
+                        class="px-3 py-2 rounded-lg border border-white focus:outline-none focus:ring-2 focus:ring-yellow-400 text-black w-64"
+                    >
+                    <button type="submit" class="bg-yellow-400 text-black px-3 py-2 rounded-lg hover:bg-yellow-500">
+                        <i class="fas fa-search"></i>
+                    </button>
+                </form>
+            <?php endif; ?>
+
             <?php if (isset($_SESSION['user_id'])): ?>
                 <a href="dashboard.php" class="transition hover:text-yellow-300 transform hover:scale-105 <?php echo active_link('dashboard.php'); ?>">
-                    <i class="fas fa-home mr-1 <?php echo active_link('dashboard.php') ? 'text-yellow-400' : 'text-white'; ?>"></i>
-                    Dashboard
+                    <i class="fas fa-home mr-1"></i> Dashboard
                 </a>
-
                 <a href="messages.php" class="transition hover:text-yellow-300 transform hover:scale-105 <?php echo active_link('messages.php'); ?>">
-                    <i class="fas fa-envelope mr-1 <?php echo active_link('messages.php') ? 'text-yellow-400' : 'text-white'; ?>"></i>
-                    Messages
+                    <i class="fas fa-envelope mr-1"></i> Messages
                 </a>
-
                 <a href="order_food.php" class="transition hover:text-yellow-300 transform hover:scale-105 <?php echo active_link('order_food.php'); ?>">
-                    <i class="fas fa-utensils mr-1 <?php echo active_link('order_food.php') ? 'text-yellow-400' : 'text-white'; ?>"></i>
-                    Order Food
+                    <i class="fas fa-utensils mr-1"></i> Order Food
                 </a>
-
                 <a href="saved_items.php" class="transition hover:text-yellow-300 transform hover:scale-105 <?php echo active_link('saved_items.php'); ?>">
-                    <i class="fas fa-bookmark mr-1 <?php echo active_link('saved_items.php') ? 'text-yellow-400' : 'text-white'; ?>"></i>
-                    Saved Items
+                    <i class="fas fa-bookmark mr-1"></i> Saved Items
                 </a>
-
                 <a href="exchange_list.php" class="transition hover:text-yellow-300 transform hover:scale-105 <?php echo active_link('exchange_list.php'); ?>">
-                    <i class="fas fa-exchange-alt mr-1 <?php echo active_link('exchange_list.php') ? 'text-yellow-400' : 'text-white'; ?>"></i>
-                    Exchanges
+                    <i class="fas fa-exchange-alt mr-1"></i> Exchanges
                 </a>
-
                 <a href="track_order.php" class="transition hover:text-yellow-300 transform hover:scale-105 <?php echo active_link('track_order.php'); ?>">
-                    <i class="fas fa-map-marker-alt mr-1 <?php echo active_link('track_order.php') ? 'text-yellow-400' : 'text-white'; ?>"></i>
-                    Track Order
+                    <i class="fas fa-map-marker-alt mr-1"></i> Track Order
                 </a>
-
                 <a href="notifications.php" class="transition hover:text-yellow-300 transform hover:scale-105 <?php echo active_link('notifications.php'); ?>">
-                    <i class="fas fa-bell mr-1 <?php echo active_link('notifications.php') ? 'text-yellow-400' : 'text-white'; ?>"></i>
-                    Notifications
+                    <i class="fas fa-bell mr-1"></i> Notifications
                 </a>
-
                 <a href="profile.php" class="transition hover:text-yellow-300 transform hover:scale-105 <?php echo active_link('profile.php'); ?>">
-                    <i class="fas fa-user mr-1 <?php echo active_link('profile.php') ? 'text-yellow-400' : 'text-white'; ?>"></i>
-                    Profile
+                    <i class="fas fa-user mr-1"></i> Profile
                 </a>
-
                 <a href="logout.php" class="transition hover:text-yellow-300 transform hover:scale-105">
                     <i class="fas fa-sign-out-alt mr-1"></i> Logout
                 </a>
-
             <?php else: ?>
                 <a href="login.php" class="transition hover:text-yellow-300 transform hover:scale-105 <?php echo active_link('login.php'); ?>">
                     <i class="fas fa-sign-in-alt mr-1"></i> Login
@@ -107,6 +109,22 @@ function active_link($page)
     <!-- Mobile Menu -->
     <div id="mobile-menu" class="hidden md:hidden bg-green-700 mt-2 rounded">
         <div class="px-4 py-2 space-y-2">
+
+            <!-- Mobile Search -->
+            <?php if (!$hide_search): ?>
+                <form action="search.php" method="GET" class="flex items-center gap-2 mb-4">
+                    <input 
+                        type="text" 
+                        name="q" 
+                        placeholder="Search food..."
+                        class="w-full px-3 py-2 rounded-lg border border-white focus:outline-none focus:ring-2 focus:ring-yellow-400 text-black"
+                    >
+                    <button type="submit" class="bg-yellow-400 text-black px-3 py-2 rounded-lg hover:bg-yellow-500">
+                        <i class="fas fa-search"></i>
+                    </button>
+                </form>
+            <?php endif; ?>
+
             <?php
             $mobile_links = [
                 "dashboard.php" => "Dashboard",
@@ -136,9 +154,6 @@ function active_link($page)
     </div>
 </nav>
 
-<main class="container mx-auto p-4">
-    <!-- Page content here -->
-</main>
 
 <script>
     // Mobile menu toggle

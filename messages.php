@@ -6,100 +6,73 @@ require_once 'includes/functions.php';
 $page_title = "Messages";
 $current_chat = null;
 $messages = [];
+$user_id = $_SESSION['user_id'];
 
-// Get list of conversations
+// Handle search
+$search_results = [];
+if (isset($_GET['search']) && !empty($_GET['search'])) {
+    $search_term = '%' . $conn->real_escape_string($_GET['search']) . '%';
+    $stmt = $conn->prepare("SELECT id, name, email, phone, profile_picture FROM users 
+                          WHERE (name LIKE ? OR email LIKE ? OR phone LIKE ?) 
+                          AND id != ?");
+    $stmt->bind_param("sssi", $search_term, $search_term, $search_term, $user_id);
+    $stmt->execute();
+    $search_results = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+}
+
+// Get conversations list
 $query = "SELECT DISTINCT 
-                CASE 
-                    WHEN sender_id = ? THEN receiver_id 
-                    ELSE sender_id 
-                END as other_user_id,
-                u.name as other_user_name, u.profile_picture as other_user_image,
-                MAX(m.created_at) as last_message_time
+            CASE 
+                WHEN sender_id = ? THEN receiver_id 
+                ELSE sender_id 
+            END as other_user_id,
+            u.name as other_user_name, 
+            u.profile_picture as other_user_image,
+            MAX(m.created_at) as last_message_time,
+            SUM(CASE WHEN m.receiver_id = ? AND m.is_read = FALSE THEN 1 ELSE 0 END) as unread_count
           FROM messages m
           JOIN users u ON CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END = u.id
-          WHERE sender_id = ? OR receiver_id = ?
-          GROUP BY other_user_id
+          WHERE (sender_id = ? OR receiver_id = ?)
+          AND (m.deleted_at IS NULL OR m.sender_id = ? OR m.receiver_id = ?)
+          GROUP BY other_user_id, other_user_name, other_user_image
           ORDER BY last_message_time DESC";
 
 $stmt = $conn->prepare($query);
-
-// Check for prepare failure
-if ($stmt === false) {
-    die('MySQL prepare failed: ' . $conn->error);  // Display the error message
-}
-
-$stmt->bind_param("iiii", $_SESSION['user_id'], $_SESSION['user_id'], $_SESSION['user_id'], $_SESSION['user_id']);
+$stmt->bind_param("iiiiiii", $user_id, $user_id, $user_id, $user_id, $user_id, $user_id, $user_id);
 $stmt->execute();
 $conversations = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
 
-// Handle opening a specific chat
+// Handle chat selection
 if (isset($_GET['to'])) {
-    $other_user_id = $_GET['to'];
-
-    // Verify the other user exists
+    $other_user_id = (int)$_GET['to'];
+    
     $stmt = $conn->prepare("SELECT id, name, profile_picture FROM users WHERE id = ?");
-    if ($stmt === false) {
-        die('MySQL prepare failed: ' . $conn->error);  // Display the error message
-    }
     $stmt->bind_param("i", $other_user_id);
     $stmt->execute();
-    $other_user = $stmt->get_result()->fetch_assoc();
+    $current_chat = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
 
-    if ($other_user) {
-        $current_chat = $other_user;
-
-        // Get messages between current user and the other user
-        $stmt = $conn->prepare("SELECT m.*, 
-                              u.name as sender_name, u.profile_picture as sender_image
+    if ($current_chat) {
+        // Get messages
+        $stmt = $conn->prepare("SELECT m.*, u.name as sender_name, u.profile_picture as sender_image
                               FROM messages m
                               JOIN users u ON m.sender_id = u.id
-                              WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)
+                              WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
+                              AND (m.deleted_at IS NULL OR m.sender_id = ? OR m.receiver_id = ?)
                               ORDER BY created_at ASC");
-
-        if ($stmt === false) {
-            die('MySQL prepare failed: ' . $conn->error);  // Display the error message
-        }
-
-        $stmt->bind_param("iiii", $_SESSION['user_id'], $other_user_id, $other_user_id, $_SESSION['user_id']);
+        $stmt->bind_param("iiiiii", $user_id, $other_user_id, $other_user_id, $user_id, $user_id, $user_id);
         $stmt->execute();
         $messages = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
 
-        // Mark messages as read
-        $stmt = $conn->prepare("UPDATE messages SET is_read = TRUE WHERE receiver_id = ? AND sender_id = ? AND is_read = FALSE");
-        if ($stmt === false) {
-            die('MySQL prepare failed: ' . $conn->error);  // Display the error message
-        }
-        $stmt->bind_param("ii", $_SESSION['user_id'], $other_user_id);
+        // Mark as read
+        $stmt = $conn->prepare("UPDATE messages SET is_read = TRUE 
+                              WHERE receiver_id = ? AND sender_id = ? AND is_read = FALSE");
+        $stmt->bind_param("ii", $user_id, $other_user_id);
         $stmt->execute();
-    }
-}
-
-// Handle sending a new message
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['message']) && $current_chat) {
-    $message = sanitizeInput($_POST['message']);
-
-    if (!empty($message)) {
-        $stmt = $conn->prepare("INSERT INTO messages (sender_id, receiver_id, message, created_at) VALUES (?, ?, ?, NOW())");
-        if ($stmt === false) {
-            die('MySQL prepare failed: ' . $conn->error);  // Display the error message
-        }
-
-        $stmt->bind_param("iis", $_SESSION['user_id'], $current_chat['id'], $message);
-        $stmt->execute();
-
-        // Create notification for the receiver
-        $notification = "New message from {$_SESSION['user_name']}";
-        $stmt = $conn->prepare("INSERT INTO notifications (user_id, content, created_at) VALUES (?, ?, NOW())");
-        if ($stmt === false) {
-            die('MySQL prepare failed: ' . $conn->error);  // Display the error message
-        }
-
-        $stmt->bind_param("is", $current_chat['id'], $notification);
-        $stmt->execute();
-
-        // Redirect to prevent form resubmission
-        header("Location: messages.php?to={$current_chat['id']}");
-        exit();
+        $stmt->close();
     }
 }
 
@@ -110,21 +83,71 @@ include 'includes/header.php';
     <!-- Conversations List -->
     <div class="w-1/3 border-r overflow-y-auto">
         <div class="p-4 border-b">
-            <h2 class="text-xl font-semibold">Conversations</h2>
+            <div class="flex justify-between items-center">
+                <h2 class="text-xl font-semibold">Conversations</h2>
+                <button id="newChatBtn" class="text-green-600 p-4 hover:text-green-800">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    </svg>
+                </button>
+            </div>
+            
+            <!-- Search Form (hidden by default) -->
+            <div id="searchContainer" class="mt-2 ">
+                <form method="GET" action="messages.php" class="flex">
+                    <input type="text" name="search" placeholder="Search by name, email or phone" 
+                           class="flex-1 px-3 py-2 border rounded-l-lg focus:outline-none focus:ring-2 focus:ring-green-600">
+                    <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded-r-lg hover:bg-green-700 transition">
+                        Search
+                    </button>
+                </form>
+                
+                <!-- Search Results -->
+                <div id="searchResults" class="mt-2">
+                    <?php if (!empty($search_results)): ?>
+                        <div class="divide-y">
+                            <?php foreach ($search_results as $user): ?>
+                                <a href="messages.php?to=<?= $user['id'] ?>" class="block p-3 hover:bg-gray-50 transition">
+                                    <div class="flex items-center">
+                                        <img src="uploads/profile/<?= $user['profile_picture'] ?? 'default.png' ?>" 
+                                             class="w-8 h-8 rounded-full mr-2">
+                                        <div>
+                                            <p class="font-medium"><?= $user['name'] ?></p>
+                                            <p class="text-xs text-gray-500"><?= $user['email'] ?></p>
+                                        </div>
+                                    </div>
+                                </a>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php elseif (isset($_GET['search'])): ?>
+                        <p class="text-center text-gray-500 py-4">No users found</p>
+                    <?php endif; ?>
+                </div>
+            </div>
         </div>
-
-        <?php if (empty($conversations)): ?>
+        
+        <!-- Conversations List -->
+        <?php if (empty($conversations) && !isset($_GET['search'])): ?>
             <p class="p-4 text-gray-500">No conversations yet.</p>
         <?php else: ?>
-            <div class="divide-y">
+            <div class="divide-y" id="conversationsList">
                 <?php foreach ($conversations as $conv): ?>
-                    <a href="messages.php?to=<?php echo $conv['other_user_id']; ?>" class="block p-4 hover:bg-gray-50 transition <?php echo $current_chat && $current_chat['id'] == $conv['other_user_id'] ? 'bg-gray-100' : ''; ?>">
+                    <a href="messages.php?to=<?= $conv['other_user_id'] ?>" 
+                       class="block p-4 hover:bg-gray-50 transition <?= $current_chat['id'] == $conv['other_user_id'] ? 'bg-gray-100' : '' ?>">
                         <div class="flex items-center">
-                            <img src="uploads/profile/<?php echo $conv['other_user_image'] ?? 'default.png'; ?>" alt="<?php echo $conv['other_user_name']; ?>" class="w-10 h-10 rounded-full mr-3">
+                            <img src="uploads/profile/<?= $conv['other_user_image'] ?? 'default.png' ?>" 
+                                 class="w-10 h-10 rounded-full mr-3">
                             <div class="flex-1 min-w-0">
-                                <p class="font-medium truncate"><?php echo $conv['other_user_name']; ?></p>
+                                <div class="flex justify-between">
+                                    <p class="font-medium truncate"><?= $conv['other_user_name'] ?></p>
+                                    <?php if ($conv['unread_count'] > 0): ?>
+                                        <span class="bg-green-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                                            <?= $conv['unread_count'] ?>
+                                        </span>
+                                    <?php endif; ?>
+                                </div>
                                 <p class="text-sm text-gray-500 truncate">
-                                    Last message: <?php echo date('M j, g:i A', strtotime($conv['last_message_time'])); ?>
+                                    <?= date('M j, g:i A', strtotime($conv['last_message_time'])) ?>
                                 </p>
                             </div>
                         </div>
@@ -139,9 +162,10 @@ include 'includes/header.php';
         <?php if ($current_chat): ?>
             <!-- Chat Header -->
             <div class="p-4 border-b flex items-center">
-                <img src="uploads/profile/<?php echo $current_chat['profile_picture'] ?? 'default.png'; ?>" alt="<?php echo $current_chat['name']; ?>" class="w-10 h-10 rounded-full mr-3">
+                <img src="uploads/profile/<?= $current_chat['profile_picture'] ?? 'default.png' ?>" 
+                     class="w-10 h-10 rounded-full mr-3">
                 <div>
-                    <h3 class="font-semibold"><?php echo $current_chat['name']; ?></h3>
+                    <h3 class="font-semibold"><?= $current_chat['name'] ?></h3>
                 </div>
             </div>
 
@@ -150,25 +174,32 @@ include 'includes/header.php';
                 <?php if (empty($messages)): ?>
                     <p class="text-center text-gray-500 mt-8">No messages yet. Start the conversation!</p>
                 <?php else: ?>
-                    <div class="space-y-4">
+                    <div class="space-y-4" id="messagesList">
                         <?php foreach ($messages as $msg): ?>
-                            <div class="<?php echo $msg['sender_id'] == $_SESSION['user_id'] ? 'flex justify-end' : 'flex justify-start'; ?>">
-                                <div class="<?php echo $msg['sender_id'] == $_SESSION['user_id'] ? 'bg-green-100' : 'bg-white'; ?> rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow">
-                                    <p class="text-gray-800"><?php echo $msg['message']; ?></p>
+                            <div class="message-item flex <?= $msg['sender_id'] == $user_id ? 'justify-end' : 'justify-start' ?>" 
+                                 data-id="<?= $msg['id'] ?>">
+                                <div class="<?= $msg['sender_id'] == $user_id ? 'bg-green-100' : 'bg-white' ?> rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow message-content">
+                                    <p class="text-gray-800"><?= htmlspecialchars($msg['message']) ?></p>
                                     <p class="text-xs text-gray-500 mt-1 text-right">
-                                        <?php echo date('g:i A', strtotime($msg['created_at'])); ?>
-                                        <?php if ($msg['sender_id'] == $_SESSION['user_id']): ?>
+                                        <?= date('g:i A', strtotime($msg['created_at'])) ?>
+                                        <?php if ($msg['sender_id'] == $user_id): ?>
                                             <?php if ($msg['is_read']): ?>
-                                                <svg class="w-3 h-3 inline-block ml-1 text-blue-500" fill="currentColor" viewBox="0 0 20 20">
-                                                    <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path>
+                                                <svg class="w-3 h-3 inline-block ml-1 text-blue-500" viewBox="0 0 20 20">
+                                                    <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
                                                 </svg>
                                             <?php else: ?>
-                                                <svg class="w-3 h-3 inline-block ml-1 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-                                                    <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path>
+                                                <svg class="w-3 h-3 inline-block ml-1 text-gray-400" viewBox="0 0 20 20">
+                                                    <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
                                                 </svg>
                                             <?php endif; ?>
                                         <?php endif; ?>
                                     </p>
+                                    <?php if ($msg['sender_id'] == $user_id): ?>
+                                        <div class="mt-1 flex justify-end">
+                                            <button class="delete-message text-xs text-red-500 hover:text-red-700" 
+                                                    data-id="<?= $msg['id'] ?>">Delete</button>
+                                        </div>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         <?php endforeach; ?>
@@ -178,19 +209,210 @@ include 'includes/header.php';
 
             <!-- Message Input -->
             <div class="p-4 border-t">
-                <form action="messages.php?to=<?php echo $current_chat['id']; ?>" method="POST" class="flex gap-2">
-                    <input type="text" name="message" placeholder="Type your message..." class="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-600">
+                <form id="messageForm" class="flex gap-2">
+                    <input type="hidden" name="receiver_id" value="<?= $current_chat['id'] ?>">
+                    <input type="text" name="message" id="messageInput" 
+                           placeholder="Type your message..." 
+                           class="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-600" required>
                     <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition">
                         Send
                     </button>
                 </form>
             </div>
 
+            <!-- Socket.IO and JavaScript -->
+            <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
             <script>
-            // Scroll to bottom of messages
-            document.addEventListener('DOMContentLoaded', function() {
+            const socket = io('http://localhost:3000', {
+                query: {
+                    userId: <?= $user_id ?>
+                }
+            });
+
+            function scrollToBottom() {
                 const container = document.getElementById('messagesContainer');
                 container.scrollTop = container.scrollHeight;
+            }
+
+            document.addEventListener('DOMContentLoaded', function() {
+                scrollToBottom();
+                
+                // Toggle search form
+                document.getElementById('newChatBtn').addEventListener('click', function() {
+                    const searchContainer = document.getElementById('searchContainer');
+                    searchContainer.classList.toggle('hidden');
+                });
+                
+                // Handle message submission with AJAX (prevent page reload)
+                document.getElementById('messageForm').addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    
+                    const formData = new FormData(this);
+                    const message = formData.get('message').trim();
+                    const receiverId = formData.get('receiver_id');
+                    
+                    if (message) {
+                        // Show sending animation
+                        const tempId = 'temp-' + Date.now();
+                        const messagesList = document.getElementById('messagesList');
+                        
+                        const tempMsg = `
+                            <div class="flex justify-end message-item" data-id="${tempId}">
+                                <div class="bg-green-100 rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow animate-pulse">
+                                    <p class="text-gray-800">${message}</p>
+                                    <p class="text-xs text-gray-500 mt-1 text-right">Sending...</p>
+                                </div>
+                            </div>
+                        `;
+                        
+                        if (messagesList) {
+                            messagesList.insertAdjacentHTML('beforeend', tempMsg);
+                        } else {
+                            document.getElementById('messagesContainer').innerHTML = `
+                                <div class="space-y-4" id="messagesList">${tempMsg}</div>
+                            `;
+                        }
+                        
+                        scrollToBottom();
+                        
+                        // Send via AJAX
+                        fetch('send_message.php', {
+                            method: 'POST',
+                            body: formData
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.success) {
+                                // Replace temp message with real one
+                                const tempElement = document.querySelector(`[data-id="${tempId}"]`);
+                                if (tempElement) {
+                                    tempElement.outerHTML = `
+                                        <div class="flex justify-end message-item" data-id="${data.message_id}">
+                                            <div class="bg-green-100 rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow">
+                                                <p class="text-gray-800">${message}</p>
+                                                <p class="text-xs text-gray-500 mt-1 text-right">
+                                                    Just now
+                                                    <svg class="w-3 h-3 inline-block ml-1 text-gray-400" viewBox="0 0 20 20">
+                                                        <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
+                                                    </svg>
+                                                </p>
+                                                <div class="mt-1 flex justify-end">
+                                                    <button class="delete-message text-xs text-red-500 hover:text-red-700" 
+                                                            data-id="${data.message_id}">Delete</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    `;
+                                }
+                                
+                                // Emit socket event
+                                socket.emit('sendMessage', {
+                                    senderId: <?= $user_id ?>,
+                                    receiverId: receiverId,
+                                    messageId: data.message_id,
+                                    message: message,
+                                    senderName: '<?= $_SESSION['user_name'] ?>',
+                                    senderImage: '<?= $_SESSION['profile_picture'] ?? 'default.png' ?>',
+                                    timestamp: new Date().toISOString()
+                                });
+                                
+                                document.getElementById('messageInput').value = '';
+                            }
+                        });
+                    }
+                });
+                
+                // Handle incoming messages
+                socket.on('receiveMessage', function(data) {
+                    if (data.receiverId == <?= $current_chat['id'] ?? 0 ?>) {
+                        const messagesList = document.getElementById('messagesList');
+                        
+                        const newMsg = `
+                            <div class="flex justify-start message-item" data-id="${data.messageId}">
+                                <div class="bg-white rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow animate-bounce">
+                                    <p class="text-gray-800">${data.message}</p>
+                                    <p class="text-xs text-gray-500 mt-1 text-right">
+                                        Just now
+                                    </p>
+                                </div>
+                            </div>
+                        `;
+                        
+                        if (messagesList) {
+                            messagesList.insertAdjacentHTML('beforeend', newMsg);
+                        } else {
+                            document.getElementById('messagesContainer').innerHTML = `
+                                <div class="space-y-4" id="messagesList">${newMsg}</div>
+                            `;
+                        }
+                        
+                        setTimeout(() => {
+                            const msgElement = document.querySelector(`[data-id="${data.messageId}"] .animate-bounce`);
+                            if (msgElement) msgElement.classList.remove('animate-bounce');
+                        }, 1000);
+                        
+                        scrollToBottom();
+                        
+                        // Mark as read
+                        fetch('mark_as_read.php', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded',
+                            },
+                            body: `message_id=${data.messageId}`
+                        });
+                    }
+                });
+                
+                // Handle read receipts
+                socket.on('updateReadStatus', function(data) {
+                    const msgElement = document.querySelector(`[data-id="${data.messageId}"]`);
+                    if (msgElement) {
+                        const svg = msgElement.querySelector('svg');
+                        if (svg) {
+                            svg.classList.remove('text-gray-400');
+                            svg.classList.add('text-blue-500');
+                        }
+                    }
+                });
+                
+                // Handle message deletion
+                document.addEventListener('click', function(e) {
+                    if (e.target.classList.contains('delete-message')) {
+                        const messageId = e.target.getAttribute('data-id');
+                        
+                        Swal.fire({
+                            title: 'Delete Message?',
+                            text: "This cannot be undone!",
+                            icon: 'warning',
+                            showCancelButton: true,
+                            confirmButtonColor: '#3085d6',
+                            cancelButtonColor: '#d33',
+                            confirmButtonText: 'Delete'
+                        }).then((result) => {
+                            if (result.isConfirmed) {
+                                fetch('delete_message.php', {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/x-www-form-urlencoded',
+                                    },
+                                    body: `message_id=${messageId}`
+                                })
+                                .then(response => response.json())
+                                .then(data => {
+                                    if (data.success) {
+                                        const msgElement = document.querySelector(`[data-id="${messageId}"]`);
+                                        if (msgElement) {
+                                            msgElement.classList.add('opacity-0', 'transition', 'duration-500');
+                                            setTimeout(() => msgElement.remove(), 500);
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                    }
+                });
             });
             </script>
         <?php else: ?>
@@ -200,7 +422,7 @@ include 'includes/header.php';
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
                     </svg>
                     <h3 class="mt-2 text-lg font-medium text-gray-900">No chat selected</h3>
-                    <p class="mt-1 text-gray-500">Select a conversation from the list or start a new one.</p>
+                    <p class="mt-1 text-gray-500">Select a conversation or start a new one</p>
                 </div>
             </div>
         <?php endif; ?>
