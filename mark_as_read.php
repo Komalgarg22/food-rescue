@@ -4,22 +4,30 @@ require_once 'includes/db.php';
 
 header('Content-Type: application/json');
 
-$user_id = $_SESSION['user_id'];
-$message_id = isset($_POST['message_id']) ? (int)$_POST['message_id'] : 0;
-
-if (!$message_id) {
-    echo json_encode(['success' => false, 'error' => 'Message ID is required']);
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    echo json_encode(['success' => false, 'error' => 'Invalid request method']);
     exit;
 }
 
-// Verify the message belongs to the user
-$stmt = $conn->prepare("UPDATE messages SET is_read = TRUE 
-                      WHERE id = ? AND receiver_id = ? AND is_read = FALSE");
-$stmt->bind_param("ii", $message_id, $user_id);
-$stmt->execute();
-$affected = $stmt->affected_rows;
-$stmt->close();
+if (!isset($_POST['message_ids'])) {
+    echo json_encode(['success' => false, 'error' => 'No message IDs provided']);
+    exit;
+}
 
-echo json_encode([
-    'success' => $affected > 0
-]);
+$message_ids = explode(',', $_POST['message_ids']);
+$placeholders = implode(',', array_fill(0, count($message_ids), '?'));
+$types = str_repeat('i', count($message_ids));
+
+$stmt = $conn->prepare("UPDATE messages SET is_read = TRUE 
+                       WHERE id IN ($placeholders) AND receiver_id = ?");
+$params = array_merge($message_ids, [$_SESSION['user_id']]);
+$stmt->bind_param($types . 'i', ...$params);
+
+if ($stmt->execute()) {
+    echo json_encode(['success' => true, 'updated' => $stmt->affected_rows]);
+} else {
+    echo json_encode(['success' => false, 'error' => $conn->error]);
+}
+
+$stmt->close();
+?>

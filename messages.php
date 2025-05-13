@@ -55,8 +55,9 @@ if (isset($_GET['to'])) {
     $stmt->close();
 
     if ($current_chat) {
-        // Get messages
-        $stmt = $conn->prepare("SELECT m.*, u.name as sender_name, u.profile_picture as sender_image
+        // Get messages with explicit is_read status
+        $stmt = $conn->prepare("SELECT m.*, u.name as sender_name, u.profile_picture as sender_image,
+                              CASE WHEN m.is_read THEN 1 ELSE 0 END as is_read
                               FROM messages m
                               JOIN users u ON m.sender_id = u.id
                               WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
@@ -67,62 +68,27 @@ if (isset($_GET['to'])) {
         $messages = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
         $stmt->close();
 
-        // Mark as read
-        $stmt = $conn->prepare("UPDATE messages SET is_read = TRUE 
-                              WHERE receiver_id = ? AND sender_id = ? AND is_read = FALSE");
-        $stmt->bind_param("ii", $user_id, $other_user_id);
-        $stmt->execute();
-        $stmt->close();
+        // Mark messages as read
+        $unread_ids = array_filter(array_map(function($msg) use ($user_id) {
+            return ($msg['receiver_id'] == $user_id && !$msg['is_read']) ? $msg['id'] : null;
+        }, $messages));
+
+        if (!empty($unread_ids)) {
+            $ids = implode(',', $unread_ids);
+            $conn->query("UPDATE messages SET is_read = TRUE WHERE id IN ($ids)");
+            
+            // Update the messages array to reflect the read status
+            foreach ($messages as &$msg) {
+                if (in_array($msg['id'], $unread_ids)) {
+                    $msg['is_read'] = 1;
+                }
+            }
+        }
     }
 }
 
 include 'includes/header.php';
 ?>
-<style>
-    @keyframes bounce {
-
-        0%,
-        100% {
-            transform: translateY(0);
-        }
-
-        50% {
-            transform: translateY(-5px);
-        }
-    }
-
-    @keyframes fadeIn {
-        from {
-            opacity: 0;
-        }
-
-        to {
-            opacity: 1;
-        }
-    }
-
-    @keyframes fadeOut {
-        from {
-            opacity: 1;
-        }
-
-        to {
-            opacity: 0;
-        }
-    }
-
-    .animate-bounce {
-        animation: bounce 0.5s ease infinite;
-    }
-
-    .animate-fade-in {
-        animation: fadeIn 0.3s ease forwards;
-    }
-
-    .animate-fade-out {
-        animation: fadeOut 0.3s ease forwards;
-    }
-</style>
 
 <div class="flex h-[calc(100vh-160px)] max-w-6xl mx-auto bg-white rounded-lg shadow-md overflow-hidden">
     <!-- Conversations List -->
@@ -139,7 +105,7 @@ include 'includes/header.php';
 
             <!-- Search Form -->
             <div id="searchContainer" class="mt-2 hidden">
-                <form method="GET" action="search_user.php" class="flex">
+                <form method="GET" action="messages.php" class="flex">
                     <input type="text" name="search" placeholder="Search by name, email or phone"
                         class="flex-1 px-3 py-2 border rounded-l-lg focus:outline-none focus:ring-2 focus:ring-green-600">
                     <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded-r-lg hover:bg-green-700 transition">
@@ -157,8 +123,8 @@ include 'includes/header.php';
                                         <img src="uploads/profile/<?= $user['profile_picture'] ?? 'default.png' ?>"
                                             class="w-8 h-8 rounded-full mr-2">
                                         <div>
-                                            <p class="font-medium"><?= $user['name'] ?></p>
-                                            <p class="text-xs text-gray-500"><?= $user['email'] ?></p>
+                                            <p class="font-medium"><?= htmlspecialchars($user['name']) ?></p>
+                                            <p class="text-xs text-gray-500"><?= htmlspecialchars($user['email']) ?></p>
                                         </div>
                                     </div>
                                 </a>
@@ -184,7 +150,7 @@ include 'includes/header.php';
                                 class="w-10 h-10 rounded-full mr-3">
                             <div class="flex-1 min-w-0">
                                 <div class="flex justify-between">
-                                    <p class="font-medium truncate"><?= $conv['other_user_name'] ?></p>
+                                    <p class="font-medium truncate"><?= htmlspecialchars($conv['other_user_name']) ?></p>
                                     <?php if ($conv['unread_count'] > 0): ?>
                                         <span class="bg-green-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
                                             <?= $conv['unread_count'] ?>
@@ -203,41 +169,43 @@ include 'includes/header.php';
     </div>
 
     <!-- Chat Area -->
-    <div class="flex-1 flex flex-col">
+    <div class="flex-1 flex flex-col min-h-0">
         <?php if ($current_chat): ?>
             <!-- Chat Header -->
-            <div class="p-4 border-b flex items-center">
+            <div class="p-4 border-b flex items-center shrink-0">
                 <img src="uploads/profile/<?= $current_chat['profile_picture'] ?? 'default.png' ?>"
                     class="w-10 h-10 rounded-full mr-3">
                 <div>
-                    <h3 class="font-semibold"><?= $current_chat['name'] ?></h3>
+                    <h3 class="font-semibold"><?= htmlspecialchars($current_chat['name']) ?></h3>
                     <p id="typingStatus" class="text-xs text-gray-500 hidden">typing...</p>
                 </div>
             </div>
 
             <!-- Messages -->
-            <div class="flex-1 p-4 overflow-y-auto bg-gray-50" id="messagesContainer">
+            <div id="messagesContainer" class="flex-1 overflow-y-auto min-h-0 p-4 bg-gray-50">
                 <?php if (empty($messages)): ?>
                     <p class="text-center text-gray-500 mt-8">No messages yet. Start the conversation!</p>
                 <?php else: ?>
-                    <div class="space-y-4" id="messagesList">
+                    <div id="messagesList" class="space-y-4 min-h-0">
                         <?php foreach ($messages as $msg): ?>
                             <div class="message-item flex <?= $msg['sender_id'] == $user_id ? 'justify-end' : 'justify-start' ?>"
                                 data-id="<?= $msg['id'] ?>">
-                                <div class="<?= $msg['sender_id'] == $user_id ? 'bg-green-100' : 'bg-white' ?> rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow message-content">
+                                <div class="<?= $msg['sender_id'] == $user_id ? 'bg-green-100' : 'bg-white' ?> rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow">
                                     <p class="text-gray-800"><?= htmlspecialchars($msg['message']) ?></p>
                                     <p class="text-xs text-gray-500 mt-1 text-right">
                                         <?= date('g:i A', strtotime($msg['created_at'])) ?>
                                         <?php if ($msg['sender_id'] == $user_id): ?>
-                                            <?php if ($msg['is_read']): ?>
-                                                <svg class="w-3 h-3 inline-block ml-1 text-blue-500" viewBox="0 0 20 20">
-                                                    <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
-                                                </svg>
-                                            <?php else: ?>
-                                                <svg class="w-3 h-3 inline-block ml-1 text-gray-400" viewBox="0 0 20 20">
-                                                    <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
-                                                </svg>
-                                            <?php endif; ?>
+                                            <span class="read-indicator">
+                                                <?php if ($msg['is_read']): ?>
+                                                    <svg class="w-3 h-3 inline-block ml-1 text-blue-500" viewBox="0 0 20 20">
+                                                        <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
+                                                    </svg>
+                                                <?php else: ?>
+                                                    <svg class="w-3 h-3 inline-block ml-1 text-gray-400" viewBox="0 0 20 20">
+                                                        <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
+                                                    </svg>
+                                                <?php endif; ?>
+                                            </span>
                                         <?php endif; ?>
                                     </p>
                                     <?php if ($msg['sender_id'] == $user_id): ?>
@@ -254,7 +222,7 @@ include 'includes/header.php';
             </div>
 
             <!-- Message Input -->
-            <div class="p-4 border-t">
+            <div class="p-4 border-t shrink-0">
                 <form id="messageForm" class="flex gap-2">
                     <input type="hidden" name="receiver_id" value="<?= $current_chat['id'] ?>">
                     <input type="text" name="message" id="messageInput"
@@ -267,21 +235,27 @@ include 'includes/header.php';
             </div>
 
             <!-- JavaScript -->
-            <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
             <script>
                 document.addEventListener('DOMContentLoaded', function() {
                     let currentChatId = <?= $current_chat['id'] ?? 0 ?>;
                     let lastMessageId = <?= !empty($messages) ? end($messages)['id'] : 0 ?>;
                     let isPolling = false;
-                    let pollingInterval = 2000; // Poll every 2 seconds
+                    let pollingInterval = 2000;
                     let typingTimeout;
                     let searchTimeout;
+                    let isWindowFocused = true;
 
-                    // Audio elements for sound effects
-                    const sendSound = new Audio('sounds/send.mp3'); // Replace with your sound file
-                    const receiveSound = new Audio('sounds/receive.mp3'); // Replace with your sound file
+                    // Track window focus
+                    window.addEventListener('focus', () => {
+                        isWindowFocused = true;
+                        markUnreadMessagesAsRead();
+                    });
+                    window.addEventListener('blur', () => isWindowFocused = false);
 
-                    receiveSound.load();
+                    // Audio elements
+                    const sendSound = new Audio('sounds/send.mp3');
+                    const receiveSound = new Audio('sounds/receive.mp3');
+
                     // Set sound duration to 1 second
                     sendSound.addEventListener('loadedmetadata', function() {
                         sendSound.currentTime = Math.min(1, sendSound.duration);
@@ -291,62 +265,51 @@ include 'includes/header.php';
                     });
 
                     // Initialize
-                    scrollToBottom();
+                    scrollToBottom('auto');
                     startPolling();
 
-                    // Toggle search form
-                    document.getElementById('newChatBtn').addEventListener('click', function() {
-                        const searchContainer = document.getElementById('searchContainer');
-                        searchContainer.classList.toggle('hidden');
-
-                        // Clear search results when hiding
-                        if (searchContainer.classList.contains('hidden')) {
-                            document.getElementById('searchResults').innerHTML = '';
-                        }
-                    });
-
-                    // Handle search input
-                    const searchInput = document.querySelector('input[name="search"]');
-                    if (searchInput) {
-                        searchInput.addEventListener('input', function() {
-                            clearTimeout(searchTimeout);
-                            searchTimeout = setTimeout(() => {
-                                const searchTerm = this.value.trim();
-                                if (searchTerm.length >= 2) {
-                                    searchUsers(searchTerm);
-                                } else {
-                                    document.getElementById('searchResults').innerHTML = '';
-                                }
-                            }, 300); // 300ms debounce
-                        });
+                    // Helper functions
+                    function isNearBottom(threshold = 100) {
+                        const container = document.getElementById('messagesContainer');
+                        if (!container) return true;
+                        return container.scrollTop + container.clientHeight + threshold >= container.scrollHeight;
                     }
 
-                    // Handle message submission
-                    document.getElementById('messageForm').addEventListener('submit', function(e) {
-                        e.preventDefault();
-                        sendMessage();
-                    });
-
-                    // Handle typing indicator
-                    const messageInput = document.getElementById('messageInput');
-                    if (messageInput) {
-                        messageInput.addEventListener('input', function() {
-                            // You can implement typing indicator via AJAX if needed
-                        });
+                    function scrollToBottom(behavior = 'smooth') {
+                        const container = document.getElementById('messagesContainer');
+                        if (container && isNearBottom()) {
+                            container.scrollTo({
+                                top: container.scrollHeight,
+                                behavior: behavior
+                            });
+                        }
                     }
 
-                    // Handle message deletion
-                    document.addEventListener('click', function(e) {
-                        if (e.target.classList.contains('delete-message')) {
-                            deleteMessage(e.target.dataset.id);
-                        }
-                    });
+                    function escapeHtml(unsafe) {
+                        return unsafe
+                            .replace(/&/g, "&amp;")
+                            .replace(/</g, "&lt;")
+                            .replace(/>/g, "&gt;")
+                            .replace(/"/g, "&quot;")
+                            .replace(/'/g, "&#039;");
+                    }
 
+                    function formatMessageTime(timestamp) {
+                        const now = new Date();
+                        const msgDate = new Date(timestamp);
+                        const diffMinutes = Math.floor((now - msgDate) / (1000 * 60));
+
+                        if (diffMinutes < 1) return 'Just now';
+                        if (diffMinutes < 60) return `${diffMinutes} min ago`;
+                        if (msgDate.toDateString() === now.toDateString()) {
+                            return msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        }
+                        return msgDate.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                    }
+
+                    // Message functions
                     function startPolling() {
-                        // Initial fetch
                         fetchNewMessages();
-
-                        // Set up interval
                         setInterval(fetchNewMessages, pollingInterval);
                     }
 
@@ -359,14 +322,16 @@ include 'includes/header.php';
                             .then(response => response.json())
                             .then(data => {
                                 if (data.success && data.messages.length > 0) {
-                                    // Play receive sound
-
                                     receiveSound.currentTime = 0;
                                     receiveSound.play().catch(e => console.log("Sound play failed:", e));
 
                                     appendMessages(data.messages);
                                     lastMessageId = data.messages[data.messages.length - 1].id;
                                     scrollToBottom();
+
+                                    if (isWindowFocused) {
+                                        markUnreadMessagesAsRead(data.messages);
+                                    }
                                 }
                             })
                             .catch(error => console.error('Error fetching messages:', error))
@@ -375,38 +340,117 @@ include 'includes/header.php';
                             });
                     }
 
-                    function searchUsers(searchTerm) {
-                        fetch(`search_user.php?search=${encodeURIComponent(searchTerm)}`)
-                            .then(response => response.json())
-                            .then(data => {
-                                if (data.success) {
-                                    displaySearchResults(data.results);
+                    function markUnreadMessagesAsRead(messages = null) {
+                        let unreadMessages = [];
+                        
+                        if (messages) {
+                            unreadMessages = messages.filter(msg => 
+                                msg.receiver_id == <?= $user_id ?> && !msg.is_read
+                            );
+                        } else {
+                            // Find all unread messages in the DOM
+                            const messageElements = document.querySelectorAll('.message-item:not(.justify-end)');
+                            messageElements.forEach(el => {
+                                const readIndicator = el.querySelector('.read-indicator svg.text-gray-400');
+                                if (readIndicator) {
+                                    unreadMessages.push({
+                                        id: el.dataset.id,
+                                        receiver_id: <?= $user_id ?>,
+                                        is_read: false
+                                    });
                                 }
-                            })
-                            .catch(error => console.error('Search error:', error));
-                    }
-
-                    function displaySearchResults(results) {
-                        const searchResults = document.getElementById('searchResults');
-
-                        if (results.length === 0) {
-                            searchResults.innerHTML = '<p class="text-center text-gray-500 py-4">No users found</p>';
-                            return;
+                            });
                         }
 
-                        searchResults.innerHTML = results.map(user => `
-            <a href="messages.php?to=${user.id}" class="block p-3 hover:bg-gray-50 transition">
-                <div class="flex items-center">
-                    <img src="uploads/profile/${user.profile_picture || 'default.png'}" 
-                         class="w-8 h-8 rounded-full mr-2">
-                    <div>
-                        <p class="font-medium">${escapeHtml(user.name)}</p>
-                        <p class="text-xs text-gray-500">${escapeHtml(user.email)}</p>
-                        ${user.phone ? `<p class="text-xs text-gray-400">${escapeHtml(user.phone)}</p>` : ''}
-                    </div>
-                </div>
-            </a>
-        `).join('');
+                        if (unreadMessages.length === 0) return;
+
+                        const messageIds = unreadMessages.map(msg => msg.id).join(',');
+
+                        fetch('mark_as_read.php', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded',
+                            },
+                            body: `message_ids=${messageIds}`
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.success) {
+                                // Update the UI
+                                unreadMessages.forEach(msg => {
+                                    const messageElement = document.querySelector(`[data-id="${msg.id}"]`);
+                                    if (messageElement) {
+                                        const readIndicator = messageElement.querySelector('.read-indicator');
+                                        if (readIndicator) {
+                                            readIndicator.innerHTML = `
+                                                <svg class="w-3 h-3 inline-block ml-1 text-blue-500" viewBox="0 0 20 20">
+                                                    <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
+                                                </svg>
+                                            `;
+                                        }
+                                    }
+                                });
+                            }
+                        })
+                        .catch(error => console.error('Error marking messages as read:', error));
+                    }
+
+                    function appendMessages(messages) {
+                        const messagesList = document.getElementById('messagesList');
+                        const wasNearBottom = isNearBottom();
+                        const prevScrollHeight = messagesList?.scrollHeight || 0;
+                        const prevScrollTop = messagesList?.scrollTop || 0;
+
+                        messages.forEach(msg => {
+                            const isSender = msg.sender_id == <?= $user_id ?>;
+                            const messageTime = formatMessageTime(msg.created_at);
+                            
+                            const messageHtml = `
+                                <div class="message-item flex ${isSender ? 'justify-end' : 'justify-start'} opacity-0 animate-fade-in" 
+                                     data-id="${msg.id}">
+                                    <div class="${isSender ? 'bg-green-100' : 'bg-white'} rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow">
+                                        <p class="text-gray-800">${escapeHtml(msg.message)}</p>
+                                        <p class="text-xs text-gray-500 mt-1 text-right">
+                                            ${messageTime}
+                                            ${isSender ? `
+                                                <span class="read-indicator">
+                                                    ${msg.is_read ? `
+                                                        <svg class="w-3 h-3 inline-block ml-1 text-blue-500" viewBox="0 0 20 20">
+                                                            <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
+                                                        </svg>
+                                                    ` : `
+                                                        <svg class="w-3 h-3 inline-block ml-1 text-gray-400" viewBox="0 0 20 20">
+                                                            <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
+                                                        </svg>
+                                                    `}
+                                                </span>
+                                            ` : ''}
+                                        </p>
+                                        ${isSender ? `
+                                            <div class="mt-1 flex justify-end">
+                                                <button class="delete-message text-xs text-red-500 hover:text-red-700" 
+                                                        data-id="${msg.id}">Delete</button>
+                                            </div>
+                                        ` : ''}
+                                    </div>
+                                </div>
+                            `;
+                            
+                            if (messagesList) {
+                                messagesList.insertAdjacentHTML('beforeend', messageHtml);
+                                const element = messagesList.lastElementChild;
+                                setTimeout(() => {
+                                    element.classList.remove('opacity-0');
+                                    if (wasNearBottom) scrollToBottom();
+                                }, 10);
+                            }
+                        });
+
+                        if (!wasNearBottom && messages.length > 0 && messagesList) {
+                            requestAnimationFrame(() => {
+                                messagesList.scrollTop = prevScrollTop + (messagesList.scrollHeight - prevScrollHeight);
+                            });
+                        }
                     }
 
                     function sendMessage() {
@@ -417,7 +461,6 @@ include 'includes/header.php';
                         if (!message || !receiverId) return;
 
                         // Play send sound
-
                         sendSound.currentTime = 0;
                         sendSound.play().catch(e => console.log("Sound play failed:", e));
 
@@ -426,23 +469,21 @@ include 'includes/header.php';
                         const messagesList = document.getElementById('messagesList');
 
                         const tempMsg = `
-            <div class="flex justify-end message-item opacity-0 animate-fade-in" data-id="${tempId}">
-                <div class="bg-green-100 rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow animate-pulse">
-                    <p class="text-gray-800">${escapeHtml(message)}</p>
-                    <p class="text-xs text-gray-500 mt-1 text-right">Sending...</p>
-                </div>
-            </div>
-        `;
+                            <div class="flex justify-end message-item opacity-0 animate-fade-in" data-id="${tempId}">
+                                <div class="bg-green-100 rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow animate-pulse">
+                                    <p class="text-gray-800">${escapeHtml(message)}</p>
+                                    <p class="text-xs text-gray-500 mt-1 text-right">Sending...</p>
+                                </div>
+                            </div>
+                        `;
 
                         if (messagesList) {
                             messagesList.insertAdjacentHTML('beforeend', tempMsg);
-                            // Force reflow to trigger animation
                             const element = messagesList.lastElementChild;
                             void element.offsetWidth;
                             element.classList.remove('opacity-0');
+                            scrollToBottom();
                         }
-
-                        scrollToBottom();
 
                         // Send via AJAX
                         fetch('send_message.php', {
@@ -456,22 +497,24 @@ include 'includes/header.php';
                                     const tempElement = document.querySelector(`[data-id="${tempId}"]`);
                                     if (tempElement) {
                                         tempElement.outerHTML = `
-                        <div class="flex justify-end message-item opacity-0 animate-fade-in" data-id="${data.message_id}">
-                            <div class="bg-green-100 rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow">
-                                <p class="text-gray-800">${escapeHtml(message)}</p>
-                                <p class="text-xs text-gray-500 mt-1 text-right">
-                                    Just now
-                                    <svg class="w-3 h-3 inline-block ml-1 text-gray-400" viewBox="0 0 20 20">
-                                        <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
-                                    </svg>
-                                </p>
-                                <div class="mt-1 flex justify-end">
-                                    <button class="delete-message text-xs text-red-500 hover:text-red-700" 
-                                            data-id="${data.message_id}">Delete</button>
-                                </div>
-                            </div>
-                        </div>
-                    `;
+                                            <div class="flex justify-end message-item opacity-0 animate-fade-in" data-id="${data.message_id}">
+                                                <div class="bg-green-100 rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow">
+                                                    <p class="text-gray-800">${escapeHtml(message)}</p>
+                                                    <p class="text-xs text-gray-500 mt-1 text-right">
+                                                        Just now
+                                                        <span class="read-indicator">
+                                                            <svg class="w-3 h-3 inline-block ml-1 text-gray-400" viewBox="0 0 20 20">
+                                                                <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
+                                                            </svg>
+                                                        </span>
+                                                    </p>
+                                                    <div class="mt-1 flex justify-end">
+                                                        <button class="delete-message text-xs text-red-500 hover:text-red-700" 
+                                                                data-id="${data.message_id}">Delete</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        `;
 
                                         // Trigger animation for the new element
                                         const newElement = document.querySelector(`[data-id="${data.message_id}"]`);
@@ -505,102 +548,79 @@ include 'includes/header.php';
                                 if (data.success) {
                                     const msgElement = document.querySelector(`[data-id="${messageId}"]`);
                                     if (msgElement) {
-                                        // Add fade-out animation before removal
                                         msgElement.classList.add('animate-fade-out');
                                         setTimeout(() => {
                                             msgElement.remove();
-                                        }, 300); // Match this with your CSS animation duration
+                                        }, 300);
                                     }
                                 }
                             });
                     }
 
-                    function appendMessages(messages) {
-                        const messagesList = document.getElementById('messagesList');
+                    // Event listeners
+                    document.getElementById('newChatBtn').addEventListener('click', function() {
+                        const searchContainer = document.getElementById('searchContainer');
+                        searchContainer.classList.toggle('hidden');
+                        if (searchContainer.classList.contains('hidden')) {
+                            document.getElementById('searchResults').innerHTML = '';
+                        }
+                    });
 
-                        messages.forEach(msg => {
-                            const isSender = msg.sender_id == <?= $user_id ?>;
-                            const messageTime = formatMessageTime(msg.created_at);
-
-                            const messageHtml = `
-                <div class="message-item flex ${isSender ? 'justify-end' : 'justify-start'} opacity-0 animate-fade-in" 
-                     data-id="${msg.id}">
-                    <div class="${isSender ? 'bg-green-100' : 'bg-white'} rounded-lg p-3 max-w-xs md:max-w-md lg:max-w-lg shadow">
-                        <p class="text-gray-800">${escapeHtml(msg.message)}</p>
-                        <p class="text-xs text-gray-500 mt-1 text-right">
-                            ${messageTime}
-                            ${isSender ? `
-                                ${msg.is_read ? `
-                                    <svg class="w-3 h-3 inline-block ml-1 text-blue-500" viewBox="0 0 20 20">
-                                        <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
-                                    </svg>
-                                ` : `
-                                    <svg class="w-3 h-3 inline-block ml-1 text-gray-400" viewBox="0 0 20 20">
-                                        <path fill="currentColor" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"></path>
-                                    </svg>
-                                `}
-                            ` : ''}
-                        </p>
-                        ${isSender ? `
-                            <div class="mt-1 flex justify-end">
-                                <button class="delete-message text-xs text-red-500 hover:text-red-700" 
-                                        data-id="${msg.id}">Delete</button>
-                            </div>
-                        ` : ''}
-                    </div>
-                </div>
-            `;
-
-                            if (messagesList) {
-                                messagesList.insertAdjacentHTML('beforeend', messageHtml);
-                                // Trigger animation
-                                const element = messagesList.lastElementChild;
-                                setTimeout(() => {
-                                    element.classList.remove('opacity-0');
-                                }, 10);
-                            }
+                    const searchInput = document.querySelector('input[name="search"]');
+                    if (searchInput) {
+                        searchInput.addEventListener('input', function() {
+                            clearTimeout(searchTimeout);
+                            searchTimeout = setTimeout(() => {
+                                const searchTerm = this.value.trim();
+                                if (searchTerm.length >= 2) {
+                                    searchUsers(searchTerm);
+                                } else {
+                                    document.getElementById('searchResults').innerHTML = '';
+                                }
+                            }, 300);
                         });
                     }
 
-                    function formatMessageTime(timestamp) {
-                        const now = new Date();
-                        const msgDate = new Date(timestamp);
-                        const diffMinutes = Math.floor((now - msgDate) / (1000 * 60));
+                    document.getElementById('messageForm').addEventListener('submit', function(e) {
+                        e.preventDefault();
+                        sendMessage();
+                    });
 
-                        if (diffMinutes < 1) return 'Just now';
-                        if (diffMinutes < 60) return `${diffMinutes} min ago`;
-                        if (msgDate.toDateString() === now.toDateString()) {
-                            return msgDate.toLocaleTimeString([], {
-                                hour: '2-digit',
-                                minute: '2-digit'
-                            });
+                    document.addEventListener('click', function(e) {
+                        if (e.target.classList.contains('delete-message')) {
+                            deleteMessage(e.target.dataset.id);
                         }
-                        return msgDate.toLocaleString([], {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit'
-                        });
+                    });
+
+                    function searchUsers(searchTerm) {
+                        fetch(`search_user.php?search=${encodeURIComponent(searchTerm)}`)
+                            .then(response => response.json())
+                            .then(data => {
+                                if (data.success) {
+                                    displaySearchResults(data.results);
+                                }
+                            })
+                            .catch(error => console.error('Search error:', error));
                     }
 
-                    function scrollToBottom() {
-                        const container = document.getElementById('messagesContainer');
-                        if (container) {
-                            // Smooth scroll to bottom
-                            container.scrollTo({
-                                top: container.scrollHeight,
-                                behavior: 'smooth'
-                            });
+                    function displaySearchResults(results) {
+                        const searchResults = document.getElementById('searchResults');
+                        if (results.length === 0) {
+                            searchResults.innerHTML = '<p class="text-center text-gray-500 py-4">No users found</p>';
+                            return;
                         }
-                    }
-
-                    function escapeHtml(unsafe) {
-                        return unsafe
-                            .replace(/&/g, "&amp;")
-                            .replace(/</g, "&lt;")
-                            .replace(/>/g, "&gt;")
-                            .replace(/"/g, "&quot;")
-                            .replace(/'/g, "&#039;");
+                        searchResults.innerHTML = results.map(user => `
+                            <a href="messages.php?to=${user.id}" class="block p-3 hover:bg-gray-50 transition">
+                                <div class="flex items-center">
+                                    <img src="uploads/profile/${user.profile_picture || 'default.png'}" 
+                                         class="w-8 h-8 rounded-full mr-2">
+                                    <div>
+                                        <p class="font-medium">${escapeHtml(user.name)}</p>
+                                        <p class="text-xs text-gray-500">${escapeHtml(user.email)}</p>
+                                    </div>
+                                </div>
+                            </a>
+                        `).join('');
                     }
                 });
             </script>
