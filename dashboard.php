@@ -36,9 +36,9 @@ $unread_notifications = $result->fetch_assoc()['count'];
 ?>
 
 <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-    <!-- Quick Stats -->
+    <!-- Quick Status -->
     <div class="bg-white p-6 rounded-lg shadow-md">
-        <h3 class="text-xl font-semibold mb-4">Your Stats</h3>
+        <h3 class="text-xl font-semibold mb-4">Your Status</h3>
         <div class="space-y-4">
             <div>
                 <p class="text-gray-500">Active Listings</p>
