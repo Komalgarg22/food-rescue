@@ -73,7 +73,7 @@ function active_link($page)
                 <a href="exchange_list.php" class="transition hover:text-yellow-300 transform hover:scale-105 <?php echo active_link('exchange_list.php'); ?>">
                     <i class="fas fa-exchange-alt mr-1"></i> Exchanges
                 </a>
-                <a href="track_order.php" class="transition hover:text-yellow-300 transform hover:scale-105 <?php echo active_link('track_order.php'); ?>">
+                <a href="my_order.php" class="transition hover:text-yellow-300 transform hover:scale-105 <?php echo active_link('track_order.php'); ?>">
                     <i class="fas fa-map-marker-alt mr-1"></i> Track Order
                 </a>
                 <a href="notifications.php" class="transition hover:text-yellow-300 transform hover:scale-105 <?php echo active_link('notifications.php'); ?>">
@@ -132,7 +132,7 @@ function active_link($page)
                 "order_food.php" => "Order Food",
                 "saved_items.php" => "Saved Items",
                 "exchange_list.php" => "Exchanges",
-                "track_order.php" => "Track Order",
+                "my.php" => "Track Order",
                 "notifications.php" => "Notifications",
                 "profile.php" => "Profile",
                 "logout.php" => "Logout"

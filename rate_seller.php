@@ -1,43 +1,40 @@
 <?php
 session_start();
-require_once 'includes/db.php';
-require_once 'includes/functions.php';
+require_once 'db.php'; // Assume your MySQLi OOP connection is here
 
-if (!isset($_SESSION['user_id']) || !isset($_POST['seller_id']) || !isset($_POST['rating'])) {
-    echo json_encode(['success' => false, 'message' => 'Invalid request']);
-    exit();
-}
+if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_SESSION['user_id'])) {
+    $from_user_id = $_SESSION['user_id'];
+    $to_user_id = intval($_POST['to_user_id']);
+    $rating = intval($_POST['rating']);
+    $review = trim($_POST['review']);
 
-$seller_id = (int)$_POST['seller_id'];
-$rating = (int)$_POST['rating'];
-$comment = isset($_POST['comment']) ? trim($_POST['comment']) : '';
-$user_id = $_SESSION['user_id'];
+    if ($from_user_id === $to_user_id) {
+        $_SESSION['msg'] = "You cannot rate yourself!";
+        header("Location: " . $_SERVER['HTTP_REFERER']);
+        exit;
+    }
 
-// Validate rating
-if ($rating < 1 || $rating > 5) {
-    echo json_encode(['success' => false, 'message' => 'Invalid rating value']);
-    exit();
-}
+    // Check if the user has already rated
+    $check = $conn->prepare("SELECT id FROM ratings WHERE from_user_id = ? AND to_user_id = ?");
+    $check->bind_param("ii", $from_user_id, $to_user_id);
+    $check->execute();
+    $check->store_result();
 
-// Check if user has already rated this seller
-$stmt = $pdo->prepare("SELECT id FROM seller_ratings WHERE user_id = ? AND seller_id = ?");
-$stmt->bind_param('ii', $user_id, $seller_id);
-$stmt->execute();
-$result = $stmt->get_result();
+    if ($check->num_rows > 0) {
+        // Update rating
+        $update = $conn->prepare("UPDATE ratings SET rating = ?, review = ?, updated_at = NOW() WHERE from_user_id = ? AND to_user_id = ?");
+        $update->bind_param("isii", $rating, $review, $from_user_id, $to_user_id);
+        $update->execute();
+        $_SESSION['msg'] = "Rating updated successfully!";
+    } else {
+        // Insert new rating
+        $stmt = $conn->prepare("INSERT INTO ratings (from_user_id, to_user_id, rating, review, created_at) VALUES (?, ?, ?, ?, NOW())");
+        $stmt->bind_param("iiis", $from_user_id, $to_user_id, $rating, $review);
+        $stmt->execute();
+        $_SESSION['msg'] = "Rating submitted successfully!";
+    }
 
-if ($result->num_rows > 0) {
-    // Update existing rating
-    $stmt = $pdo->prepare("UPDATE seller_ratings SET rating = ?, comment = ?, updated_at = NOW() WHERE user_id = ? AND seller_id = ?");
-    $stmt->bind_param('isii', $rating, $comment, $user_id, $seller_id);
-} else {
-    // Create new rating
-    $stmt = $pdo->prepare("INSERT INTO seller_ratings (user_id, seller_id, rating, comment, created_at) VALUES (?, ?, ?, ?, NOW())");
-    $stmt->bind_param('iiis', $user_id, $seller_id, $rating, $comment);
-}
-
-if ($stmt->execute()) {
-    echo json_encode(['success' => true, 'message' => 'Rating submitted successfully']);
-} else {
-    echo json_encode(['success' => false, 'message' => 'Failed to submit rating']);
+    header("Location: " . $_SERVER['HTTP_REFERER']);
+    exit;
 }
 ?>

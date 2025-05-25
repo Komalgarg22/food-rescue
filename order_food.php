@@ -136,9 +136,11 @@ include 'includes/header.php';
     <form action="order_food.php?id=<?php echo $food_id; ?>" method="POST">
         <div class="mb-4">
             <label for="pickup_time" class="block text-gray-700 mb-2">Preferred Pickup Time*</label>
-            <input type="datetime-local" id="pickup_time" name="pickup_time" required 
-                   min="<?php echo date('Y-m-d\TH:i'); ?>" 
-                   class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-600">
+<input type="datetime-local" id="pickup_time" name="pickup_time" required 
+       min="<?php echo date('Y-m-d\TH:i'); ?>" 
+       max="<?php echo date('Y-m-d\TH:i', strtotime('+24 hours')); ?>"
+       class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-600">
+
         </div>
 
         <div class="mb-6">

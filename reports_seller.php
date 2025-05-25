@@ -1,33 +1,34 @@
 <?php
 session_start();
-require_once 'includes/db.php';
-require_once 'includes/functions.php';
+require_once 'db.php'; // Assume your MySQLi OOP connection is here
 
-if (!isset($_SESSION['user_id']) || !isset($_POST['seller_id']) || !isset($_POST['reason'])) {
-    echo json_encode(['success' => false, 'message' => 'Invalid request']);
-    exit();
-}
+if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_SESSION['user_id'])) {
+    $reporter_id = $_SESSION['user_id'];
+    $reported_user_id = intval($_POST['reported_user_id']);
+    $reason = trim($_POST['reason']);
 
-$seller_id = (int)$_POST['seller_id'];
-$reason = trim($_POST['reason']);
-$details = isset($_POST['details']) ? trim($_POST['details']) : '';
-$user_id = $_SESSION['user_id'];
+    if ($reporter_id === $reported_user_id) {
+        $_SESSION['msg'] = "You cannot report yourself!";
+        header("Location: " . $_SERVER['HTTP_REFERER']);
+        exit;
+    }
 
-// Validate reason
-$valid_reasons = ['Fraud', 'Inappropriate', 'Spam', 'Quality', 'Other'];
-if (!in_array($reason, $valid_reasons)) {
-    echo json_encode(['success' => false, 'message' => 'Invalid reason']);
-    exit();
-}
+    // Prevent duplicate reports (optional)
+    $check = $conn->prepare("SELECT id FROM reports WHERE reporter_id = ? AND reported_user_id = ?");
+    $check->bind_param("ii", $reporter_id, $reported_user_id);
+    $check->execute();
+    $check->store_result();
 
-// Insert report
-$stmt = $pdo->prepare("INSERT INTO seller_reports (reporter_id, seller_id, reason, details, status, created_at) 
-                      VALUES (?, ?, ?, ?, 'Pending', NOW())");
-$stmt->bind_param('iiss', $user_id, $seller_id, $reason, $details);
+    if ($check->num_rows > 0) {
+        $_SESSION['msg'] = "You have already reported this user.";
+    } else {
+        $stmt = $conn->prepare("INSERT INTO reports (reporter_id, reported_user_id, reason, created_at) VALUES (?, ?, ?, NOW())");
+        $stmt->bind_param("iis", $reporter_id, $reported_user_id, $reason);
+        $stmt->execute();
+        $_SESSION['msg'] = "Report submitted successfully!";
+    }
 
-if ($stmt->execute()) {
-    echo json_encode(['success' => true, 'message' => 'Report submitted successfully']);
-} else {
-    echo json_encode(['success' => false, 'message' => 'Failed to submit report']);
+    header("Location: " . $_SERVER['HTTP_REFERER']);
+    exit;
 }
 ?>
